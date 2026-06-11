@@ -8,63 +8,87 @@ export type CategoryKey =
   | "reflection"
   | "coach_as_agent";
 
+export type Lang = "en" | "he";
+
 export interface CategoryData {
   weight: number;
   label: string;
+  labelHe: string;
   color: string;
   phrases: string[];
+  phrasesHe: string[];
 }
 
 export const AGENCY_CATALOG: Record<CategoryKey, CategoryData> = {
   agency_transfer: {
     weight: 2.0,
     label: "Agency Transfer",
+    labelHe: "העברת שליטה",
     color: "#2563eb",
     phrases: ["up to you", "your choice", "your decision", "you're in control", "you decide", "it's your call", "you choose", "you have the power", "the decision is yours", "you're the one who", "take control", "it's your", "you lead"],
+    phrasesHe: ["תלוי בך", "הבחירה שלך", "ההחלטה שלך", "אתה בשליטה", "את בשליטה", "אתה מחליט", "את מחליטה", "אתה בוחר", "את בוחרת", "בידיים שלך", "הכוח בידיך", "אתה מוביל", "את מובילה"],
   },
   epistemic_check: {
     weight: 1.5,
     label: "Epistemic Check",
+    labelHe: "בדיקת מודעות",
     color: "#7c3aed",
     phrases: ["you know", "do you think", "what do you think", "are you aware", "is it clear to you", "you understand", "what's your take", "how do you see it", "what do you make of", "what's your sense", "how does it look to you", "from your perspective"],
+    phrasesHe: ["אתה יודע", "את יודעת", "מה דעתך", "מה אתה חושב", "מה את חושבת", "האם ברור לך", "אתה מבין", "את מבינה", "איך אתה רואה", "איך את רואה", "מהזווית שלך", "מה התחושה שלך"],
   },
   focus: {
     weight: 1.5,
     label: "Focus",
+    labelHe: "מיקוד",
     color: "#0891b2",
     phrases: ["number one", "most important", "one thing", "the main thing", "priority", "top of mind", "the key thing", "if there's one thing", "the single most", "what matters most", "first and foremost"],
+    phrasesHe: ["הכי חשוב", "דבר אחד", "הדבר המרכזי", "בראש סדר העדיפויות", "עדיפות עליונה", "אם יש דבר אחד", "מה הכי משמעותי", "ראשון בחשיבות", "העיקר"],
   },
   socratic: {
     weight: 1.5,
     label: "Socratic",
+    labelHe: "סוקרטי",
     color: "#059669",
     phrases: ["why would it", "what prevents", "what if", "how come", "what makes you", "what stops you", "what would happen if", "what's holding you", "what's keeping you", "why do you think"],
+    phrasesHe: ["מה מונע", "מה אם", "איך זה ש", "מה גורם לך", "מה עוצר אותך", "מה היה קורה אם", "מה מחזיק אותך", "למה אתה חושב", "למה את חושבת", "מדוע"],
   },
   conditional: {
     weight: 1.0,
     label: "Conditional",
+    labelHe: "תנאי",
     color: "#d97706",
     phrases: ["if you", "suppose you", "imagine you", "let's say you", "in a scenario where you", "assuming you", "what if you"],
+    phrasesHe: ["אם אתה", "אם את", "נניח ש", "תאר לעצמך", "תארי לעצמך", "בוא נגיד ש", "בואי נגיד ש", "במצב שבו", "בהנחה ש"],
   },
   client_desire: {
     weight: 1.5,
     label: "Client Desire",
+    labelHe: "רצון הלקוח",
     color: "#dc2626",
     phrases: ["you want", "you wish", "important to you", "you'd like", "you prefer", "what matters to you", "what you really want", "what you're hoping", "your goal is", "you're looking for", "you desire"],
+    phrasesHe: ["אתה רוצה", "את רוצה", "אתה שואף", "את שואפת", "חשוב לך", "אתה מעדיף", "את מעדיפה", "מה משמעותי לך", "מה אתה באמת רוצה", "מה את באמת רוצה", "המטרה שלך", "אתה מחפש", "את מחפשת"],
   },
   reflection: {
     weight: 1.0,
     label: "Reflection",
+    labelHe: "השתקפות",
     color: "#9333ea",
     phrases: ["it sounds like you", "you feel", "you're feeling", "you seem", "what i'm hearing is you", "so you're saying", "it seems like you"],
+    phrasesHe: ["נשמע לי ש", "אתה מרגיש", "את מרגישה", "אתה נראה", "את נראית", "אני שומע ש", "אני שומעת ש", "אז אתה אומר", "אז את אומרת", "נדמה לי ש"],
   },
   coach_as_agent: {
     weight: -1.0,
     label: "Coach as Agent",
+    labelHe: "מאמן כסוכן",
     color: "#6b7280",
     phrases: ["i think", "i believe", "in my opinion", "from my perspective", "i feel that", "i suggest", "my advice", "i recommend", "i want you to", "you should", "you need to"],
+    phrasesHe: ["אני חושב", "אני חושבת", "אני מאמין", "אני מאמינה", "לדעתי", "מנקודת מבטי", "אני מציע", "אני מציעה", "ההמלצה שלי", "אני ממליץ", "אני ממליצה", "אני רוצה שתעשה", "אני רוצה שתעשי", "אתה צריך", "את צריכה", "אתה חייב", "את חייבת"],
   },
 };
+
+export function catLabel(cat: CategoryKey, lang: Lang): string {
+  return lang === "he" ? AGENCY_CATALOG[cat].labelHe : AGENCY_CATALOG[cat].label;
+}
 
 export interface Turn {
   speaker: "coach" | "client";
