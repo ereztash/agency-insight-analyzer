@@ -110,8 +110,9 @@ export function computeAgencyScore(text: string): ScoreResult {
 
   for (const [catKey, catData] of Object.entries(AGENCY_CATALOG)) {
     let catScore = 0;
-    for (const phrase of catData.phrases) {
-      if (lower.includes(phrase)) {
+    const allPhrases = [...catData.phrases, ...catData.phrasesHe];
+    for (const phrase of allPhrases) {
+      if (lower.includes(phrase.toLowerCase())) {
         catScore += catData.weight;
         matches.push(`${catKey}: "${phrase}"`);
       }
@@ -142,8 +143,22 @@ const OWNING_PATTERNS = [
   /i (feel|believe) that i/i,
 ];
 
+const OWNING_PATTERNS_HE = [
+  /אני (מבין|מבינה|רואה|קולט|קולטת|תופס|תופסת)/,
+  /אני רוצה ל/,
+  /אני (צריך|צריכה|חייב|חייבת) ל/,
+  /(החלטתי|אחליט|אני מחליט|אני מחליטה)/,
+  /אני (אעשה|הולך לעשות|הולכת לעשות|מתכוון|מתכוונת)/,
+  /(המטרה שלי|התוכנית שלי|הצעד הבא שלי)/,
+  /אני מרגיש ש?אני/,
+  /אני מרגישה ש?אני/,
+];
+
 export function detectOwningMoment(text: string): boolean {
-  return OWNING_PATTERNS.some((p) => p.test(text));
+  return (
+    OWNING_PATTERNS.some((p) => p.test(text)) ||
+    OWNING_PATTERNS_HE.some((p) => p.test(text))
+  );
 }
 
 export interface CoachTurnMeta {
