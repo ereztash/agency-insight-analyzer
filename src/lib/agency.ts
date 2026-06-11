@@ -220,6 +220,11 @@ function makePhase(start: number, end: number, cat: CategoryKey | null): Phase {
   };
 }
 
+export function phaseLabel(p: Phase, lang: Lang): string {
+  if (p.category === "none") return lang === "he" ? "ניטרלי" : "Neutral";
+  return catLabel(p.category as CategoryKey, lang);
+}
+
 export interface AnalysisStats {
   overallScore: number;
   rawAvg: number;
