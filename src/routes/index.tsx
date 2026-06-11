@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast, Toaster } from "sonner";
 import {
   Bar,
@@ -32,11 +32,16 @@ import {
   AGENCY_CATALOG,
   type AnalysisStats,
   type CategoryKey,
+  type Lang,
   type Turn,
+  UI_STRINGS,
   analyzeTurns,
+  catLabel,
   generateRecommendations,
   parseTextTranscript,
+  phaseLabel,
   SAMPLE_TRANSCRIPT,
+  SAMPLE_TRANSCRIPT_HE,
 } from "@/lib/agency";
 
 export const Route = createFileRoute("/")({
@@ -46,12 +51,12 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Analyze coaching conversation transcripts in your browser and get an agency report with phase map, owning moments, and recommendations.",
+          "Analyze coaching conversation transcripts in your browser. Hebrew & English supported. All processing client-side.",
       },
       { property: "og:title", content: "Agency Debrief" },
       {
         property: "og:description",
-        content: "Privacy-first agency analysis for coaches. All processing client-side.",
+        content: "Privacy-first agency analysis for coaches in Hebrew and English.",
       },
     ],
   }),
@@ -59,8 +64,16 @@ export const Route = createFileRoute("/")({
 });
 
 function Index() {
+  const [lang, setLang] = useState<Lang>("en");
   const [rawText, setRawText] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
+  const t = UI_STRINGS[lang];
+  const isRtl = lang === "he";
+
+  useEffect(() => {
+    document.documentElement.dir = isRtl ? "rtl" : "ltr";
+    document.documentElement.lang = lang;
+  }, [isRtl, lang]);
 
   const stats = useMemo<AnalysisStats | null>(() => {
     if (turns.length === 0) return null;
@@ -70,11 +83,11 @@ function Index() {
   const handleAnalyzeText = () => {
     const parsed = parseTextTranscript(rawText);
     if (parsed.length === 0) {
-      toast.error("No turns found. Use lines like 'Coach: ...' and 'Client: ...'");
+      toast.error(t.errNoTurns);
       return;
     }
     setTurns(parsed);
-    toast.success(`Analyzed ${parsed.length} turns`);
+    toast.success(`${t.analyzed} ${parsed.length} ${t.turnsWord}`);
   };
 
   const handleFile = async (file: File) => {
@@ -84,53 +97,59 @@ function Index() {
       if (!Array.isArray(data)) throw new Error("Expected an array");
       const cleaned: Turn[] = data
         .filter(
-          (t: unknown): t is Turn =>
-            !!t &&
-            typeof t === "object" &&
-            "speaker" in t &&
-            "text" in t &&
-            ((t as Turn).speaker === "coach" || (t as Turn).speaker === "client") &&
-            typeof (t as Turn).text === "string",
+          (x: unknown): x is Turn =>
+            !!x &&
+            typeof x === "object" &&
+            "speaker" in x &&
+            "text" in x &&
+            ((x as Turn).speaker === "coach" || (x as Turn).speaker === "client") &&
+            typeof (x as Turn).text === "string",
         )
-        .map((t) => ({ speaker: t.speaker, text: t.text, is_owning: t.is_owning }));
+        .map((x) => ({ speaker: x.speaker, text: x.text, is_owning: x.is_owning }));
       if (cleaned.length === 0) throw new Error("No valid turns");
       setTurns(cleaned);
-      toast.success(`Loaded ${cleaned.length} turns`);
+      toast.success(`${t.loaded} ${cleaned.length} ${t.turnsWord}`);
     } catch (e) {
-      toast.error(`Could not load JSON: ${(e as Error).message}`);
+      toast.error(`${t.errBadJson}: ${(e as Error).message}`);
     }
   };
 
   const loadSample = () => {
-    setTurns(SAMPLE_TRANSCRIPT);
+    const sample = lang === "he" ? SAMPLE_TRANSCRIPT_HE : SAMPLE_TRANSCRIPT;
+    const coachWord = lang === "he" ? "מאמן" : "Coach";
+    const clientWord = lang === "he" ? "לקוח" : "Client";
+    setTurns(sample);
     setRawText(
-      SAMPLE_TRANSCRIPT.map(
-        (t) => `${t.speaker === "coach" ? "Coach" : "Client"}: ${t.text}`,
-      ).join("\n"),
+      sample
+        .map((tt) => `${tt.speaker === "coach" ? coachWord : clientWord}: ${tt.text}`)
+        .join("\n"),
     );
-    toast.success("Sample conversation loaded");
+    toast.success(t.sampleLoaded);
   };
 
   const handleExport = () => window.print();
 
+  const toggleLang = () => setLang((l) => (l === "en" ? "he" : "en"));
+
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground" dir={isRtl ? "rtl" : "ltr"}>
       <Toaster richColors position="top-right" />
 
       <header className="border-b border-border print:hidden">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Agency Debrief</h1>
-            <p className="text-sm text-muted-foreground">
-              Private, in-browser analysis of coaching conversations.
-            </p>
+            <h1 className="text-2xl font-semibold tracking-tight">{t.title}</h1>
+            <p className="text-sm text-muted-foreground">{t.subtitle}</p>
           </div>
           <div className="flex gap-2">
+            <Button variant="ghost" onClick={toggleLang} aria-label="Toggle language">
+              {lang === "en" ? "עברית" : "English"}
+            </Button>
             <Button variant="outline" onClick={loadSample}>
-              Load sample
+              {t.loadSample}
             </Button>
             <Button onClick={handleExport} disabled={!stats}>
-              Export PDF
+              {t.exportPdf}
             </Button>
           </div>
         </div>
@@ -139,12 +158,12 @@ function Index() {
       <main className="mx-auto max-w-6xl px-6 py-8">
         <Card className="mb-8 print:hidden">
           <CardHeader>
-            <CardTitle>Input transcript</CardTitle>
+            <CardTitle>{t.inputTitle}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap items-center gap-3">
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm hover:bg-accent">
-                Upload JSON
+                {t.uploadJson}
                 <input
                   type="file"
                   accept="application/json,.json"
@@ -156,18 +175,25 @@ function Index() {
                 />
               </label>
               <span className="text-sm text-muted-foreground">
-                or paste below as <code className="rounded bg-muted px-1">Coach:</code> /{" "}
-                <code className="rounded bg-muted px-1">Client:</code> lines
+                {t.pasteHint}{" "}
+                <code className="rounded bg-muted px-1">
+                  {lang === "he" ? "מאמן:" : "Coach:"}
+                </code>{" "}
+                /{" "}
+                <code className="rounded bg-muted px-1">
+                  {lang === "he" ? "לקוח:" : "Client:"}
+                </code>
               </span>
             </div>
             <Textarea
               value={rawText}
               onChange={(e) => setRawText(e.target.value)}
-              placeholder={"Coach: What's most important today?\nClient: I want to figure out my next step."}
+              placeholder={t.placeholder}
               className="min-h-[160px] font-mono text-sm"
+              dir={isRtl ? "rtl" : "ltr"}
             />
             <div className="flex gap-2">
-              <Button onClick={handleAnalyzeText}>Analyze</Button>
+              <Button onClick={handleAnalyzeText}>{t.analyze}</Button>
               {stats && (
                 <Button
                   variant="ghost"
@@ -176,48 +202,47 @@ function Index() {
                     setRawText("");
                   }}
                 >
-                  Clear
+                  {t.clear}
                 </Button>
               )}
             </div>
           </CardContent>
         </Card>
 
-        {stats ? <Report stats={stats} /> : <EmptyState />}
+        {stats ? <Report stats={stats} lang={lang} /> : <EmptyState text={t.emptyState} />}
       </main>
     </div>
   );
 }
 
-function EmptyState() {
+function EmptyState({ text }: { text: string }) {
   return (
     <div className="rounded-lg border border-dashed border-border p-12 text-center">
-      <p className="text-muted-foreground">
-        Upload a transcript or load the sample to see the agency report.
-      </p>
+      <p className="text-muted-foreground">{text}</p>
     </div>
   );
 }
 
-function Report({ stats }: { stats: AnalysisStats }) {
-  const recs = useMemo(() => generateRecommendations(stats), [stats]);
+function Report({ stats, lang }: { stats: AnalysisStats; lang: Lang }) {
+  const t = UI_STRINGS[lang];
+  const recs = useMemo(() => generateRecommendations(stats, lang), [stats, lang]);
   return (
     <Tabs defaultValue="overview" className="space-y-6">
       <TabsList className="print:hidden">
-        <TabsTrigger value="overview">Overview</TabsTrigger>
-        <TabsTrigger value="timeline">Timeline</TabsTrigger>
-        <TabsTrigger value="phases">Phase Map</TabsTrigger>
-        <TabsTrigger value="recs">Recommendations</TabsTrigger>
+        <TabsTrigger value="overview">{t.overview}</TabsTrigger>
+        <TabsTrigger value="timeline">{t.timeline}</TabsTrigger>
+        <TabsTrigger value="phases">{t.phases}</TabsTrigger>
+        <TabsTrigger value="recs">{t.recs}</TabsTrigger>
       </TabsList>
 
       <TabsContent value="overview" className="space-y-6 print:block">
-        <OverviewTab stats={stats} />
+        <OverviewTab stats={stats} lang={lang} />
       </TabsContent>
       <TabsContent value="timeline" className="space-y-6 print:block">
-        <TimelineTab stats={stats} />
+        <TimelineTab stats={stats} lang={lang} />
       </TabsContent>
       <TabsContent value="phases" className="space-y-6 print:block">
-        <PhaseTab stats={stats} />
+        <PhaseTab stats={stats} lang={lang} />
       </TabsContent>
       <TabsContent value="recs" className="space-y-6 print:block">
         <RecsTab recs={recs} />
@@ -237,11 +262,12 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function OverviewTab({ stats }: { stats: AnalysisStats }) {
-  const topLabel = stats.topCategory ? AGENCY_CATALOG[stats.topCategory].label : "—";
+function OverviewTab({ stats, lang }: { stats: AnalysisStats; lang: Lang }) {
+  const t = UI_STRINGS[lang];
+  const topLabel = stats.topCategory ? catLabel(stats.topCategory, lang) : "—";
   const chartData = Object.entries(stats.categoryTotals).map(([k, v]) => ({
     key: k,
-    label: AGENCY_CATALOG[k as CategoryKey].label,
+    label: catLabel(k as CategoryKey, lang),
     value: Number(v.toFixed(2)),
     color: AGENCY_CATALOG[k as CategoryKey].color,
   }));
@@ -251,7 +277,7 @@ function OverviewTab({ stats }: { stats: AnalysisStats }) {
       <Card className="border-2" style={{ borderColor: "#2563eb" }}>
         <CardContent className="py-8 text-center">
           <p className="text-sm uppercase tracking-wider text-muted-foreground">
-            Overall Agency Score
+            {t.overallScore}
           </p>
           <p className="mt-2 text-6xl font-bold" style={{ color: "#2563eb" }}>
             {stats.overallScore.toFixed(0)}
@@ -261,24 +287,24 @@ function OverviewTab({ stats }: { stats: AnalysisStats }) {
       </Card>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Owning moments" value={stats.owningMomentsCount} />
-        <StatCard label="Coach turns" value={stats.coachTurnsCount} />
-        <StatCard label="Top category" value={topLabel} />
+        <StatCard label={t.owningMoments} value={stats.owningMomentsCount} />
+        <StatCard label={t.coachTurns} value={stats.coachTurnsCount} />
+        <StatCard label={t.topCategory} value={topLabel} />
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Agency lift</CardTitle>
+          <CardTitle>{t.agencyLift}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            Score before owning:{" "}
+            {t.scoreBefore}:{" "}
             <span className="font-semibold text-foreground">
               {stats.scoreBeforeOwning.toFixed(2)}
             </span>{" "}
-            | Overall:{" "}
-            <span className="font-semibold text-foreground">{stats.rawAvg.toFixed(2)}</span> |
-            Lift:{" "}
+            | {t.overall}:{" "}
+            <span className="font-semibold text-foreground">{stats.rawAvg.toFixed(2)}</span> |{" "}
+            {t.lift}:{" "}
             <span className="font-semibold text-foreground">
               {stats.agencyLift ? `${stats.agencyLift.toFixed(2)}x` : "—"}
             </span>
@@ -288,12 +314,12 @@ function OverviewTab({ stats }: { stats: AnalysisStats }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Category breakdown</CardTitle>
+          <CardTitle>{t.categoryBreakdown}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} layout="vertical" margin={{ left: 30 }}>
+              <BarChart data={chartData} layout="vertical" margin={{ left: 30, right: 30 }}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis type="number" />
                 <YAxis dataKey="label" type="category" width={120} />
@@ -312,14 +338,14 @@ function OverviewTab({ stats }: { stats: AnalysisStats }) {
   );
 }
 
-function TimelineTab({ stats }: { stats: AnalysisStats }) {
+function TimelineTab({ stats, lang }: { stats: AnalysisStats; lang: Lang }) {
+  const t = UI_STRINGS[lang];
   const lineData = stats.coachMeta.map((m) => ({
     index: m.index + 1,
     score: Number(m.score.toFixed(2)),
     globalIndex: m.globalIndex,
   }));
 
-  // Coach turns immediately followed by an owning client moment
   const owningCoachIndices = new Set<number>();
   for (const oi of stats.owningGlobalIndices) {
     for (let j = oi - 1; j >= 0; j--) {
@@ -334,7 +360,6 @@ function TimelineTab({ stats }: { stats: AnalysisStats }) {
   const owningRows = Array.from(owningCoachIndices)
     .map((idx) => {
       const meta = stats.coachMeta[idx];
-      // Find the client turn after meta.globalIndex
       let clientText = "";
       for (let j = meta.globalIndex + 1; j < stats.turns.length; j++) {
         if (stats.turns[j].speaker === "client") {
@@ -347,9 +372,7 @@ function TimelineTab({ stats }: { stats: AnalysisStats }) {
         coach: meta.text,
         client: clientText,
         score: meta.score,
-        category: meta.dominantCategory
-          ? AGENCY_CATALOG[meta.dominantCategory].label
-          : "—",
+        category: meta.dominantCategory ? catLabel(meta.dominantCategory, lang) : "—",
       };
     })
     .sort((a, b) => b.score - a.score)
@@ -359,17 +382,26 @@ function TimelineTab({ stats }: { stats: AnalysisStats }) {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Agency score over time</CardTitle>
+          <CardTitle>{t.scoreOverTime}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={lineData}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="index" label={{ value: "Coach turn #", position: "insideBottom", offset: -4 }} />
+                <XAxis
+                  dataKey="index"
+                  label={{ value: t.coachTurnAxis, position: "insideBottom", offset: -4 }}
+                />
                 <YAxis />
                 <Tooltip />
-                <Line type="monotone" dataKey="score" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
+                <Line
+                  type="monotone"
+                  dataKey="score"
+                  stroke="#2563eb"
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                />
                 {Array.from(owningCoachIndices).map((idx) => (
                   <ReferenceDot
                     key={idx}
@@ -388,20 +420,20 @@ function TimelineTab({ stats }: { stats: AnalysisStats }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Top owning moments</CardTitle>
+          <CardTitle>{t.topOwning}</CardTitle>
         </CardHeader>
         <CardContent>
           {owningRows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No owning moments detected.</p>
+            <p className="text-sm text-muted-foreground">{t.noOwning}</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Turn #</TableHead>
-                  <TableHead>Coach text (before)</TableHead>
-                  <TableHead>Client text</TableHead>
-                  <TableHead>Score</TableHead>
-                  <TableHead>Category</TableHead>
+                  <TableHead>{t.turnNum}</TableHead>
+                  <TableHead>{t.coachTextBefore}</TableHead>
+                  <TableHead>{t.clientText}</TableHead>
+                  <TableHead>{t.score}</TableHead>
+                  <TableHead>{t.category}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -423,13 +455,14 @@ function TimelineTab({ stats }: { stats: AnalysisStats }) {
   );
 }
 
-function PhaseTab({ stats }: { stats: AnalysisStats }) {
+function PhaseTab({ stats, lang }: { stats: AnalysisStats; lang: Lang }) {
+  const t = UI_STRINGS[lang];
   const total = stats.coachTurnsCount || 1;
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Phase map</CardTitle>
+          <CardTitle>{t.phaseMap}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex h-14 w-full overflow-hidden rounded-md border border-border">
@@ -439,14 +472,15 @@ function PhaseTab({ stats }: { stats: AnalysisStats }) {
                   ? "#cbd5e1"
                   : AGENCY_CATALOG[p.category as CategoryKey].color;
               const width = `${(p.turnCount / total) * 100}%`;
+              const label = phaseLabel(p, lang);
               return (
                 <div
                   key={i}
                   className="flex items-center justify-center px-2 text-xs font-medium text-white"
                   style={{ width, backgroundColor: color }}
-                  title={`${p.label} — ${p.turnCount} turns`}
+                  title={`${label} — ${p.turnCount}`}
                 >
-                  <span className="truncate">{p.label}</span>
+                  <span className="truncate">{label}</span>
                 </div>
               );
             })}
@@ -456,16 +490,16 @@ function PhaseTab({ stats }: { stats: AnalysisStats }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Phase details</CardTitle>
+          <CardTitle>{t.phaseDetails}</CardTitle>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Start</TableHead>
-                <TableHead>End</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead># Turns</TableHead>
+                <TableHead>{t.start}</TableHead>
+                <TableHead>{t.end}</TableHead>
+                <TableHead>{t.category}</TableHead>
+                <TableHead>{t.numTurns}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -473,7 +507,7 @@ function PhaseTab({ stats }: { stats: AnalysisStats }) {
                 <TableRow key={i}>
                   <TableCell>{p.startIndex + 1}</TableCell>
                   <TableCell>{p.endIndex + 1}</TableCell>
-                  <TableCell>{p.label}</TableCell>
+                  <TableCell>{phaseLabel(p, lang)}</TableCell>
                   <TableCell>{p.turnCount}</TableCell>
                 </TableRow>
               ))}
