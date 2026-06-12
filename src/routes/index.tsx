@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
+import { Check, FileJson, Loader2, Upload } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -16,6 +17,7 @@ import {
 } from "recharts";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -41,10 +43,13 @@ import {
   applyRoleMap,
   buildDefaultRoleMap,
   type CategoryKey,
+  detectLang,
   distinctSpeakers,
   type Lang,
-  parseRawTranscript,
+  normalizeRawTurns,
+  parseConversationText,
   type RawTurn,
+  resolveSpeakerAlias,
   type SpeakerRole,
   type Turn,
   UI_STRINGS,
@@ -75,11 +80,15 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
+type Stage = "upload" | "looking" | "ready" | "report";
+
 function Index() {
   const [lang, setLang] = useState<Lang>("en");
-  const [rawText, setRawText] = useState("");
+  const [pasteText, setPasteText] = useState("");
   const [rawTurns, setRawTurns] = useState<RawTurn[]>([]);
   const [roleMap, setRoleMap] = useState<Record<string, SpeakerRole>>({});
+  const [stage, setStage] = useState<Stage>("upload");
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const t = UI_STRINGS[lang];
   const isRtl = lang === "he";
 
@@ -92,68 +101,75 @@ function Index() {
 
   const turns = useMemo<Turn[]>(() => applyRoleMap(rawTurns, roleMap), [rawTurns, roleMap]);
 
-  const stats = useMemo<AnalysisStats | null>(() => {
-    if (turns.length === 0) return null;
-    return analyzeTurns(turns);
-  }, [turns]);
+  const stats = useMemo<AnalysisStats | null>(
+    () => (turns.length === 0 ? null : analyzeTurns(turns)),
+    [turns],
+  );
 
-  const loadRawTurns = (parsed: RawTurn[]) => {
+  // The mapping panel only adds value when speakers aren't plainly coach/client.
+  const needsRoleMapping = useMemo(
+    () => speakers.length > 2 || speakers.some((s) => resolveSpeakerAlias(s) === null),
+    [speakers],
+  );
+
+  // Drive the gentle "Looking… → ready check → report" reveal.
+  useEffect(() => {
+    if (stage === "looking") {
+      const id = setTimeout(() => setStage("ready"), 900);
+      return () => clearTimeout(id);
+    }
+    if (stage === "ready") {
+      const id = setTimeout(() => setStage("report"), 700);
+      return () => clearTimeout(id);
+    }
+  }, [stage]);
+
+  const beginAnalysis = (parsed: RawTurn[], detectFrom: string) => {
+    setLang(detectLang(detectFrom));
     setRawTurns(parsed);
     setRoleMap((prev) => buildDefaultRoleMap(parsed, prev));
+    setStage("looking");
   };
 
-  const handleAnalyzeText = () => {
-    const parsed = parseRawTranscript(rawText);
+  const handlePaste = () => {
+    const parsed = parseConversationText(pasteText);
     if (parsed.length === 0) {
       toast.error(t.errNoTurns);
       return;
     }
-    loadRawTurns(parsed);
-    toast.success(`${t.analyzed} ${parsed.length} ${t.turnsWord}`);
+    beginAnalysis(parsed, pasteText);
   };
 
   const handleFile = async (file: File) => {
     try {
       const text = await file.text();
-      const data = JSON.parse(text);
-      if (!Array.isArray(data)) throw new Error("Expected an array");
-      const cleaned: RawTurn[] = data
-        .filter(
-          (x: unknown): x is { speaker: string; text: string; is_owning?: boolean } =>
-            !!x &&
-            typeof x === "object" &&
-            "speaker" in x &&
-            "text" in x &&
-            typeof (x as { speaker: unknown }).speaker === "string" &&
-            typeof (x as { text: unknown }).text === "string",
-        )
-        .map((x) => ({ speaker: x.speaker.trim(), text: x.text, is_owning: x.is_owning }))
-        .filter((x) => x.speaker && x.text);
-      if (cleaned.length === 0) throw new Error("No valid turns");
-      loadRawTurns(cleaned);
-      toast.success(`${t.loaded} ${cleaned.length} ${t.turnsWord}`);
-    } catch (e) {
-      toast.error(`${t.errBadJson}: ${(e as Error).message}`);
+      const parsed = normalizeRawTurns(JSON.parse(text));
+      if (parsed.length === 0) throw new Error("no-turns");
+      beginAnalysis(parsed, parsed.map((r) => r.text).join(" "));
+    } catch {
+      toast.error(t.jsonError);
     }
   };
 
   const loadSample = () => {
-    const sample = lang === "he" ? SAMPLE_TRANSCRIPT_HE : SAMPLE_TRANSCRIPT;
-    const coachWord = lang === "he" ? "מאמן" : "Coach";
-    const clientWord = lang === "he" ? "לקוח" : "Client";
+    const useHe = lang === "he";
+    const sample = useHe ? SAMPLE_TRANSCRIPT_HE : SAMPLE_TRANSCRIPT;
+    const coachWord = useHe ? "מאמן" : "Coach";
+    const clientWord = useHe ? "לקוח" : "Client";
     const raws: RawTurn[] = sample.map((tt) => ({
       speaker: tt.speaker === "coach" ? coachWord : clientWord,
       text: tt.text,
     }));
-    loadRawTurns(raws);
-    setRawText(raws.map((tt) => `${tt.speaker}: ${tt.text}`).join("\n"));
-    toast.success(t.sampleLoaded);
+    setPasteText(raws.map((tt) => `${tt.speaker}: ${tt.text}`).join("\n"));
+    beginAnalysis(raws, sample.map((s) => s.text).join(" "));
   };
 
-  const handleClear = () => {
+  const handleStartOver = () => {
     setRawTurns([]);
     setRoleMap({});
-    setRawText("");
+    setPasteText("");
+    setOptionsOpen(true);
+    setStage("upload");
   };
 
   const setSpeakerRole = (speaker: string, role: SpeakerRole) =>
@@ -162,6 +178,8 @@ function Index() {
   const handleExport = () => window.print();
 
   const toggleLang = () => setLang((l) => (l === "en" ? "he" : "en"));
+
+  const showReport = stage === "report" && !!stats;
 
   return (
     <div className="min-h-screen bg-background text-foreground" dir={isRtl ? "rtl" : "ltr"}>
@@ -180,7 +198,7 @@ function Index() {
             <Button variant="outline" onClick={loadSample}>
               {t.loadSample}
             </Button>
-            <Button onClick={handleExport} disabled={!stats}>
+            <Button onClick={handleExport} disabled={!showReport}>
               {t.exportPdf}
             </Button>
           </div>
@@ -188,65 +206,287 @@ function Index() {
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-8">
-        <Card className="mb-8 print:hidden">
-          <CardHeader>
-            <CardTitle>{t.inputTitle}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm hover:bg-accent">
-                {t.uploadJson}
-                <input
-                  type="file"
-                  accept="application/json,.json"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) handleFile(f);
-                  }}
-                />
-              </label>
-              <span className="text-sm text-muted-foreground">
-                {t.pasteHint}{" "}
-                <code className="rounded bg-muted px-1">{lang === "he" ? "שם:" : "Name:"}</code>{" "}
-                {lang === "he" ? "(כל שם דובר)" : "(any speaker name)"}
-              </span>
-            </div>
-            <Textarea
-              value={rawText}
-              onChange={(e) => setRawText(e.target.value)}
-              placeholder={t.placeholder}
-              className="min-h-[160px] font-mono text-sm"
-              dir={isRtl ? "rtl" : "ltr"}
-            />
-            <div className="flex gap-2">
-              <Button onClick={handleAnalyzeText}>{t.analyze}</Button>
-              {rawTurns.length > 0 && (
-                <Button variant="ghost" onClick={handleClear}>
-                  {t.clear}
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        {speakers.length > 0 && (
-          <SpeakerRolesPanel
-            speakers={speakers}
-            rawTurns={rawTurns}
-            roleMap={roleMap}
-            onChange={setSpeakerRole}
+        {stage === "upload" && (
+          <UploadFlow
             lang={lang}
+            optionsOpen={optionsOpen}
+            onOpenOptions={() => setOptionsOpen(true)}
+            pasteText={pasteText}
+            onPasteChange={setPasteText}
+            onPaste={handlePaste}
+            onFile={handleFile}
           />
         )}
 
-        {stats ? (
-          <Report stats={stats} lang={lang} />
-        ) : (
-          <EmptyState text={speakers.length > 0 ? t.errNoCoach : t.emptyState} />
+        {(stage === "looking" || stage === "ready") && (
+          <AnalyzingCard lang={lang} done={stage === "ready"} />
+        )}
+
+        {showReport && (
+          <div className="space-y-8">
+            <div className="flex justify-end print:hidden">
+              <Button variant="outline" onClick={handleStartOver}>
+                {t.analyzeAnother}
+              </Button>
+            </div>
+
+            {needsRoleMapping && (
+              <SpeakerRolesPanel
+                speakers={speakers}
+                rawTurns={rawTurns}
+                roleMap={roleMap}
+                onChange={setSpeakerRole}
+                lang={lang}
+              />
+            )}
+
+            <Report stats={stats} lang={lang} />
+
+            <ConsentBanner lang={lang} />
+          </div>
+        )}
+
+        {stage === "report" && !stats && (
+          <div className="space-y-8">
+            <div className="flex justify-end print:hidden">
+              <Button variant="outline" onClick={handleStartOver}>
+                {t.analyzeAnother}
+              </Button>
+            </div>
+            <SpeakerRolesPanel
+              speakers={speakers}
+              rawTurns={rawTurns}
+              roleMap={roleMap}
+              onChange={setSpeakerRole}
+              lang={lang}
+            />
+            <EmptyState text={t.errNoCoach} />
+          </div>
         )}
       </main>
     </div>
+  );
+}
+
+function UploadFlow({
+  lang,
+  optionsOpen,
+  onOpenOptions,
+  pasteText,
+  onPasteChange,
+  onPaste,
+  onFile,
+}: {
+  lang: Lang;
+  optionsOpen: boolean;
+  onOpenOptions: () => void;
+  pasteText: string;
+  onPasteChange: (v: string) => void;
+  onPaste: () => void;
+  onFile: (f: File) => void;
+}) {
+  const t = UI_STRINGS[lang];
+  const isRtl = lang === "he";
+
+  if (!optionsOpen) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border py-24 text-center">
+        <Button
+          onClick={onOpenOptions}
+          className="h-auto gap-2 bg-blue-600 px-8 py-4 text-base text-white hover:bg-blue-700"
+        >
+          <Upload className="h-5 w-5" />
+          {t.uploadCta}
+        </Button>
+        <p className="text-sm text-muted-foreground">{t.uploadCtaSub}</p>
+        <p className="text-xs text-muted-foreground">{t.noSignup}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid animate-in fade-in slide-in-from-bottom-2 gap-6 duration-300 md:grid-cols-2">
+      <JsonDropCard lang={lang} onFile={onFile} />
+      <Card className="print:hidden">
+        <CardHeader>
+          <CardTitle>{t.uploadCardPasteTitle}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Textarea
+            value={pasteText}
+            onChange={(e) => onPasteChange(e.target.value)}
+            placeholder={t.pastePlaceholder}
+            className="min-h-[180px] font-mono text-sm"
+            dir={isRtl ? "rtl" : "ltr"}
+          />
+          <Button
+            className="w-full bg-blue-600 text-white hover:bg-blue-700"
+            onClick={onPaste}
+            disabled={!pasteText.trim()}
+          >
+            {t.analyze}
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function JsonDropCard({ lang, onFile }: { lang: Lang; onFile: (f: File) => void }) {
+  const t = UI_STRINGS[lang];
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  return (
+    <Card className="print:hidden">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <FileJson className="h-5 w-5 text-blue-600" />
+          {t.uploadCardJsonTitle}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) onFile(f);
+          }}
+          className={cn(
+            "flex min-h-[180px] w-full flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-6 py-10 text-center transition-colors",
+            dragging ? "border-blue-600 bg-blue-50" : "border-input hover:bg-accent",
+          )}
+        >
+          <Upload className="h-8 w-8 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">{t.uploadCardJsonHint}</span>
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onFile(f);
+            e.target.value = "";
+          }}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function AnalyzingCard({ lang, done }: { lang: Lang; done: boolean }) {
+  const t = UI_STRINGS[lang];
+  return (
+    <Card className="print:hidden">
+      <CardContent className="flex flex-col items-center justify-center gap-4 py-24 text-center">
+        {done ? (
+          <div className="flex h-14 w-14 animate-in zoom-in-50 items-center justify-center rounded-full bg-blue-600 text-white duration-300">
+            <Check className="h-7 w-7" strokeWidth={3} />
+          </div>
+        ) : (
+          <Loader2 className="h-10 w-10 animate-spin text-blue-600" />
+        )}
+        <p className="text-lg font-medium">{done ? t.ready : t.lookingAt}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+const CONSENT_KEY = "agency_insight_consent";
+const CONSENT_AT_KEY = "agency_insight_consent_at";
+const CONSENT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function hasRecentConsent(): boolean {
+  try {
+    const value = localStorage.getItem(CONSENT_KEY);
+    if (value !== "granted" && value !== "denied") return false;
+    const at = Number(localStorage.getItem(CONSENT_AT_KEY) ?? "0");
+    return Number.isFinite(at) && Date.now() - at < CONSENT_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+function writeConsent(value: "granted" | "denied") {
+  try {
+    localStorage.setItem(CONSENT_KEY, value);
+    localStorage.setItem(CONSENT_AT_KEY, String(Date.now()));
+  } catch {
+    /* storage unavailable — fail silently */
+  }
+}
+
+function ConsentBanner({ lang }: { lang: Lang }) {
+  const t = UI_STRINGS[lang];
+  const [visible, setVisible] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [thanks, setThanks] = useState(false);
+
+  // Read storage only on the client to avoid SSR/hydration mismatch.
+  useEffect(() => {
+    if (!hasRecentConsent()) setVisible(true);
+  }, []);
+
+  if (!visible) return null;
+
+  const handleYes = () => {
+    writeConsent("granted");
+    setThanks(true);
+    setTimeout(() => setVisible(false), 1800);
+  };
+
+  const handleNo = () => {
+    writeConsent("denied");
+    setVisible(false);
+  };
+
+  return (
+    <Card className="animate-in fade-in slide-in-from-bottom-2 border-border/70 bg-muted/40 duration-500 print:hidden">
+      <CardContent className="py-5">
+        {thanks ? (
+          <p className="animate-in fade-in text-center text-sm font-medium text-blue-700">
+            {t.consentThanks}
+          </p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <div>
+              <p className="text-sm font-semibold">{t.consentTitle}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{t.consentBody}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={handleYes} className="bg-blue-600 text-white hover:bg-blue-700">
+                {t.consentYes}
+              </Button>
+              <Button variant="ghost" onClick={handleNo}>
+                {t.consentNo}
+              </Button>
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                {t.consentWhat}
+              </button>
+            </div>
+            {expanded && (
+              <p className="animate-in fade-in rounded-md bg-background/70 p-3 text-xs leading-relaxed text-muted-foreground">
+                {t.consentExplain}
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
