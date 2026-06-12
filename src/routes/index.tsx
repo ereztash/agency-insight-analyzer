@@ -20,6 +20,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -31,14 +38,19 @@ import {
 import {
   AGENCY_CATALOG,
   type AnalysisStats,
+  applyRoleMap,
+  buildDefaultRoleMap,
   type CategoryKey,
+  distinctSpeakers,
   type Lang,
+  parseRawTranscript,
+  type RawTurn,
+  type SpeakerRole,
   type Turn,
   UI_STRINGS,
   analyzeTurns,
   catLabel,
   generateRecommendations,
-  parseTextTranscript,
   phaseLabel,
   SAMPLE_TRANSCRIPT,
   SAMPLE_TRANSCRIPT_HE,
@@ -66,7 +78,8 @@ export const Route = createFileRoute("/")({
 function Index() {
   const [lang, setLang] = useState<Lang>("en");
   const [rawText, setRawText] = useState("");
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [rawTurns, setRawTurns] = useState<RawTurn[]>([]);
+  const [roleMap, setRoleMap] = useState<Record<string, SpeakerRole>>({});
   const t = UI_STRINGS[lang];
   const isRtl = lang === "he";
 
@@ -75,18 +88,27 @@ function Index() {
     document.documentElement.lang = lang;
   }, [isRtl, lang]);
 
+  const speakers = useMemo(() => distinctSpeakers(rawTurns), [rawTurns]);
+
+  const turns = useMemo<Turn[]>(() => applyRoleMap(rawTurns, roleMap), [rawTurns, roleMap]);
+
   const stats = useMemo<AnalysisStats | null>(() => {
     if (turns.length === 0) return null;
     return analyzeTurns(turns);
   }, [turns]);
 
+  const loadRawTurns = (parsed: RawTurn[]) => {
+    setRawTurns(parsed);
+    setRoleMap((prev) => buildDefaultRoleMap(parsed, prev));
+  };
+
   const handleAnalyzeText = () => {
-    const parsed = parseTextTranscript(rawText);
+    const parsed = parseRawTranscript(rawText);
     if (parsed.length === 0) {
       toast.error(t.errNoTurns);
       return;
     }
-    setTurns(parsed);
+    loadRawTurns(parsed);
     toast.success(`${t.analyzed} ${parsed.length} ${t.turnsWord}`);
   };
 
@@ -95,19 +117,20 @@ function Index() {
       const text = await file.text();
       const data = JSON.parse(text);
       if (!Array.isArray(data)) throw new Error("Expected an array");
-      const cleaned: Turn[] = data
+      const cleaned: RawTurn[] = data
         .filter(
-          (x: unknown): x is Turn =>
+          (x: unknown): x is { speaker: string; text: string; is_owning?: boolean } =>
             !!x &&
             typeof x === "object" &&
             "speaker" in x &&
             "text" in x &&
-            ((x as Turn).speaker === "coach" || (x as Turn).speaker === "client") &&
-            typeof (x as Turn).text === "string",
+            typeof (x as { speaker: unknown }).speaker === "string" &&
+            typeof (x as { text: unknown }).text === "string",
         )
-        .map((x) => ({ speaker: x.speaker, text: x.text, is_owning: x.is_owning }));
+        .map((x) => ({ speaker: x.speaker.trim(), text: x.text, is_owning: x.is_owning }))
+        .filter((x) => x.speaker && x.text);
       if (cleaned.length === 0) throw new Error("No valid turns");
-      setTurns(cleaned);
+      loadRawTurns(cleaned);
       toast.success(`${t.loaded} ${cleaned.length} ${t.turnsWord}`);
     } catch (e) {
       toast.error(`${t.errBadJson}: ${(e as Error).message}`);
@@ -118,14 +141,23 @@ function Index() {
     const sample = lang === "he" ? SAMPLE_TRANSCRIPT_HE : SAMPLE_TRANSCRIPT;
     const coachWord = lang === "he" ? "מאמן" : "Coach";
     const clientWord = lang === "he" ? "לקוח" : "Client";
-    setTurns(sample);
-    setRawText(
-      sample
-        .map((tt) => `${tt.speaker === "coach" ? coachWord : clientWord}: ${tt.text}`)
-        .join("\n"),
-    );
+    const raws: RawTurn[] = sample.map((tt) => ({
+      speaker: tt.speaker === "coach" ? coachWord : clientWord,
+      text: tt.text,
+    }));
+    loadRawTurns(raws);
+    setRawText(raws.map((tt) => `${tt.speaker}: ${tt.text}`).join("\n"));
     toast.success(t.sampleLoaded);
   };
+
+  const handleClear = () => {
+    setRawTurns([]);
+    setRoleMap({});
+    setRawText("");
+  };
+
+  const setSpeakerRole = (speaker: string, role: SpeakerRole) =>
+    setRoleMap((prev) => ({ ...prev, [speaker]: role }));
 
   const handleExport = () => window.print();
 
@@ -176,13 +208,8 @@ function Index() {
               </label>
               <span className="text-sm text-muted-foreground">
                 {t.pasteHint}{" "}
-                <code className="rounded bg-muted px-1">
-                  {lang === "he" ? "מאמן:" : "Coach:"}
-                </code>{" "}
-                /{" "}
-                <code className="rounded bg-muted px-1">
-                  {lang === "he" ? "לקוח:" : "Client:"}
-                </code>
+                <code className="rounded bg-muted px-1">{lang === "he" ? "שם:" : "Name:"}</code>{" "}
+                {lang === "he" ? "(כל שם דובר)" : "(any speaker name)"}
               </span>
             </div>
             <Textarea
@@ -194,14 +221,8 @@ function Index() {
             />
             <div className="flex gap-2">
               <Button onClick={handleAnalyzeText}>{t.analyze}</Button>
-              {stats && (
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setTurns([]);
-                    setRawText("");
-                  }}
-                >
+              {rawTurns.length > 0 && (
+                <Button variant="ghost" onClick={handleClear}>
                   {t.clear}
                 </Button>
               )}
@@ -209,7 +230,21 @@ function Index() {
           </CardContent>
         </Card>
 
-        {stats ? <Report stats={stats} lang={lang} /> : <EmptyState text={t.emptyState} />}
+        {speakers.length > 0 && (
+          <SpeakerRolesPanel
+            speakers={speakers}
+            rawTurns={rawTurns}
+            roleMap={roleMap}
+            onChange={setSpeakerRole}
+            lang={lang}
+          />
+        )}
+
+        {stats ? (
+          <Report stats={stats} lang={lang} />
+        ) : (
+          <EmptyState text={speakers.length > 0 ? t.errNoCoach : t.emptyState} />
+        )}
       </main>
     </div>
   );
@@ -220,6 +255,76 @@ function EmptyState({ text }: { text: string }) {
     <div className="rounded-lg border border-dashed border-border p-12 text-center">
       <p className="text-muted-foreground">{text}</p>
     </div>
+  );
+}
+
+function SpeakerRolesPanel({
+  speakers,
+  rawTurns,
+  roleMap,
+  onChange,
+  lang,
+}: {
+  speakers: string[];
+  rawTurns: RawTurn[];
+  roleMap: Record<string, SpeakerRole>;
+  onChange: (speaker: string, role: SpeakerRole) => void;
+  lang: Lang;
+}) {
+  const tt = UI_STRINGS[lang];
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const turn of rawTurns) c[turn.speaker] = (c[turn.speaker] ?? 0) + 1;
+    return c;
+  }, [rawTurns]);
+
+  const roleLabels: Record<SpeakerRole, string> = {
+    coach: tt.roleCoach,
+    client: tt.roleClient,
+    ignore: tt.roleIgnore,
+  };
+
+  return (
+    <Card className="mb-8 print:hidden">
+      <CardHeader>
+        <CardTitle>{tt.speakerRoles}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">{tt.speakerRolesHint}</p>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{tt.speaker}</TableHead>
+              <TableHead>{tt.turnsCol}</TableHead>
+              <TableHead className="w-40">{tt.role}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {speakers.map((sp) => (
+              <TableRow key={sp}>
+                <TableCell className="font-medium">{sp}</TableCell>
+                <TableCell className="text-muted-foreground">{counts[sp] ?? 0}</TableCell>
+                <TableCell>
+                  <Select
+                    value={roleMap[sp] ?? "ignore"}
+                    onValueChange={(v) => onChange(sp, v as SpeakerRole)}
+                  >
+                    <SelectTrigger className="w-36">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="coach">{roleLabels.coach}</SelectItem>
+                      <SelectItem value="client">{roleLabels.client}</SelectItem>
+                      <SelectItem value="ignore">{roleLabels.ignore}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
