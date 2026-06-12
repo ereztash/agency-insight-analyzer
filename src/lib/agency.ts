@@ -481,6 +481,54 @@ export function parseTextTranscript(raw: string): Turn[] {
   return applyRoleMap(raws, buildDefaultRoleMap(raws));
 }
 
+/**
+ * Parse pasted conversation text into raw turns. When the text uses speaker
+ * prefixes ("Coach:", "Sarah:", "מאמן:") those are honored. When no prefixes
+ * are present at all, each non-empty line becomes a turn with speakers
+ * alternating Coach/Client, starting with the coach.
+ */
+export function parseConversationText(raw: string): RawTurn[] {
+  const prefixed = parseRawTranscript(raw);
+  if (prefixed.length > 0) return prefixed;
+
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return lines.map((text, i) => ({ speaker: i % 2 === 0 ? "Coach" : "Client", text }));
+}
+
+const JSON_SPEAKER_KEYS = ["speaker", "role", "name", "author", "from"];
+const JSON_TEXT_KEYS = ["text", "content", "message", "utterance", "body"];
+
+/**
+ * Normalize an arbitrary parsed-JSON value into raw turns, tolerating common
+ * field-name variations (e.g. `role` instead of `speaker`, `content` instead
+ * of `text`). Returns an empty array if nothing usable is found.
+ */
+export function normalizeRawTurns(data: unknown): RawTurn[] {
+  if (!Array.isArray(data)) return [];
+  const out: RawTurn[] = [];
+  for (const item of data) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const speakerRaw = JSON_SPEAKER_KEYS.map((k) => obj[k]).find((v) => typeof v === "string");
+    const textRaw = JSON_TEXT_KEYS.map((k) => obj[k]).find((v) => typeof v === "string");
+    if (typeof speakerRaw !== "string" || typeof textRaw !== "string") continue;
+    const speaker = speakerRaw.trim();
+    const text = textRaw.trim();
+    if (!speaker || !text) continue;
+    const is_owning = typeof obj.is_owning === "boolean" ? obj.is_owning : undefined;
+    out.push({ speaker, text, is_owning });
+  }
+  return out;
+}
+
+/** Detect UI language from conversation content: Hebrew characters → Hebrew. */
+export function detectLang(text: string): Lang {
+  return /[֐-׿]/.test(text) ? "he" : "en";
+}
+
 export const SAMPLE_TRANSCRIPT: Turn[] = [
   { speaker: "coach", text: "What's the most important thing you want to focus on today?" },
   { speaker: "client", text: "I want to figure out my next career move." },
@@ -573,6 +621,27 @@ export const UI_STRINGS = {
     speaker: "Speaker",
     turnsCol: "Turns",
     errNoCoach: "Map at least one speaker to Coach to run the analysis.",
+    uploadCta: "Upload a conversation",
+    uploadCtaSub: "Transcript JSON or plain text. Takes 10 seconds.",
+    uploadCardJsonTitle: "I have a JSON file",
+    uploadCardJsonHint: "Drag a file here, or click to choose.",
+    uploadCardPasteTitle: "I'll paste text",
+    pastePlaceholder:
+      "Coach: What would you like to work on today?\nClient: I'm not sure where to start.\nCoach: Take your time. What feels most important?",
+    jsonError: "File format not recognized. Try a JSON file with speaker and text fields.",
+    lookingAt: "Looking at your conversation…",
+    ready: "Ready",
+    analyzeAnother: "Analyze another conversation",
+    noSignup: "No sign-up. No email. Just upload.",
+    consentTitle: "Help us improve",
+    consentBody:
+      "Can we learn from this conversation to improve the system? We won't store the text — only statistical patterns. Your answer won't affect your report.",
+    consentYes: "Yes, learn from this",
+    consentNo: "No, thanks",
+    consentWhat: "What does this mean?",
+    consentExplain:
+      "We compute statistical metrics (like “how much the client's desires were explored”) and use them to improve the model. We don't store raw text or identify clients. Everything is anonymous.",
+    consentThanks: "Thank you!",
   },
   he: {
     title: "ניתוח שליטה בשיחה",
@@ -631,5 +700,26 @@ export const UI_STRINGS = {
     speaker: "דובר",
     turnsCol: "תורות",
     errNoCoach: "מפה לפחות דובר אחד לתפקיד מאמן כדי להריץ את הניתוח.",
+    uploadCta: "העלה שיחה וקבל תובנות",
+    uploadCtaSub: "JSON של תמלול, או טקסט פשוט. 10 שניות.",
+    uploadCardJsonTitle: "יש לי קובץ JSON",
+    uploadCardJsonHint: "גרור קובץ לכאן, או לחץ לבחירה.",
+    uploadCardPasteTitle: "אני אדביק טקסט",
+    pastePlaceholder:
+      "מאמן: על מה היית רוצה לעבוד היום?\nלקוח: אני לא בטוח מאיפה להתחיל.\nמאמן: קח את הזמן. מה מרגיש הכי חשוב?",
+    jsonError: "הקובץ לא בפורמט הנכון. נסה קובץ JSON עם שדות speaker ו-text.",
+    lookingAt: "אנחנו מסתכלים על השיחה שלך…",
+    ready: "מוכן",
+    analyzeAnother: "נתח שיחה נוספת",
+    noSignup: "ללא הרשמה. ללא אימייל. פשוט מעלים.",
+    consentTitle: "עזור לנו להשתפר",
+    consentBody:
+      "האם נוכל ללמוד מהשיחה הזו כדי לשפר את המערכת? לא נשמור את הטקסט עצמו — רק דפוסים סטטיסטיים. התשובה שלך לא תשפיע על הדו״ח.",
+    consentYes: "כן, אפשר ללמוד",
+    consentNo: "לא, תודה",
+    consentWhat: "מה זה אומר?",
+    consentExplain:
+      "אנחנו מחשבים מדדים סטטיסטיים (כמו ‘עד כמה הרצונות של הלקוח נחקרו’) ומשתמשים בהם כדי לשפר את המודל. אנחנו לא שומרים טקסט גולמי, ולא מזהים לקוחות. הכל אנונימי.",
+    consentThanks: "תודה!",
   },
 } as const;
