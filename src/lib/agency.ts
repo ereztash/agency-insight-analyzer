@@ -377,19 +377,108 @@ const SPEAKER_ALIASES: Record<string, "coach" | "client"> = {
   מטופלת: "client",
 };
 
-export function parseTextTranscript(raw: string): Turn[] {
+/** A turn that keeps its original speaker label, before it is mapped to a role. */
+export interface RawTurn {
+  speaker: string;
+  text: string;
+  is_owning?: boolean;
+}
+
+/** A speaker label can be mapped to a coaching role, or excluded from analysis. */
+export type SpeakerRole = "coach" | "client" | "ignore";
+
+/** Resolve a free-text speaker label to a known role, if it matches an alias. */
+export function resolveSpeakerAlias(name: string): "coach" | "client" | null {
+  return SPEAKER_ALIASES[name.trim().toLowerCase()] ?? null;
+}
+
+/**
+ * Parse a transcript into raw turns, accepting ANY speaker label before the
+ * first colon (e.g. "Sarah:", "Dr. Cohen:", "Speaker 1:"). Labels are kept
+ * as-is so the user can later map each one to a coach/client role.
+ */
+export function parseRawTranscript(raw: string): RawTurn[] {
   const lines = raw.split(/\r?\n/);
-  const turns: Turn[] = [];
+  const turns: RawTurn[] = [];
   for (const line of lines) {
-    const m = line.match(/^\s*([A-Za-z\u0590-\u05FF]+)\s*:\s*(.*)$/);
+    const m = line.match(/^\s*([^:]{1,40}?)\s*:\s*(.+)$/);
     if (!m) continue;
-    const key = m[1].toLowerCase();
-    const speaker = SPEAKER_ALIASES[key];
-    if (!speaker) continue;
+    const speaker = m[1].trim();
     const text = m[2].trim();
+    // Require a letter in the label so timestamps like "12:30 - note" are not
+    // treated as a speaker, and skip URLs where the text begins with "//".
+    if (!/[A-Za-z\u0590-\u05FF]/.test(speaker)) continue;
+    if (text.startsWith("//")) continue;
     if (text) turns.push({ speaker, text });
   }
   return turns;
+}
+
+/** Distinct speaker labels, in order of first appearance. */
+export function distinctSpeakers(rawTurns: RawTurn[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of rawTurns) {
+    if (!seen.has(t.speaker)) {
+      seen.add(t.speaker);
+      out.push(t.speaker);
+    }
+  }
+  return out;
+}
+
+/**
+ * Build a default role mapping for the speakers in `rawTurns`, preserving any
+ * assignments already present in `existing`. Known aliases win; otherwise the
+ * first unassigned speaker becomes the coach, the second the client, and any
+ * further speakers are ignored. The user can override all of it.
+ */
+export function buildDefaultRoleMap(
+  rawTurns: RawTurn[],
+  existing: Record<string, SpeakerRole> = {},
+): Record<string, SpeakerRole> {
+  const map: Record<string, SpeakerRole> = { ...existing };
+  let coachTaken = Object.values(map).includes("coach");
+  let clientTaken = Object.values(map).includes("client");
+
+  for (const name of distinctSpeakers(rawTurns)) {
+    if (map[name]) continue;
+    const alias = resolveSpeakerAlias(name);
+    if (alias === "coach" && !coachTaken) {
+      map[name] = "coach";
+      coachTaken = true;
+    } else if (alias === "client" && !clientTaken) {
+      map[name] = "client";
+      clientTaken = true;
+    } else if (!coachTaken) {
+      map[name] = "coach";
+      coachTaken = true;
+    } else if (!clientTaken) {
+      map[name] = "client";
+      clientTaken = true;
+    } else {
+      map[name] = "ignore";
+    }
+  }
+  return map;
+}
+
+/** Apply a role mapping to raw turns, dropping any speaker mapped to "ignore". */
+export function applyRoleMap(rawTurns: RawTurn[], roleMap: Record<string, SpeakerRole>): Turn[] {
+  const turns: Turn[] = [];
+  for (const t of rawTurns) {
+    const role = roleMap[t.speaker];
+    if (role === "coach" || role === "client") {
+      turns.push({ speaker: role, text: t.text, is_owning: t.is_owning });
+    }
+  }
+  return turns;
+}
+
+/** Legacy helper: parse + auto-map known aliases in one step. */
+export function parseTextTranscript(raw: string): Turn[] {
+  const raws = parseRawTranscript(raw);
+  return applyRoleMap(raws, buildDefaultRoleMap(raws));
 }
 
 export const SAMPLE_TRANSCRIPT: Turn[] = [
@@ -465,14 +554,25 @@ export const UI_STRINGS = {
     start: "Start",
     end: "End",
     numTurns: "# Turns",
-    placeholder: "Coach: What's most important today?\nClient: I want to figure out my next step.",
-    errNoTurns: "No turns found. Use lines like 'Coach: ...' and 'Client: ...'",
+    placeholder:
+      "Use any speaker names, one turn per line, e.g.\nSarah: What's most important today?\nDanny: I want to figure out my next step.",
+    errNoTurns: "No turns found. Use lines like 'Name: ...' (any speaker name before the colon).",
     errBadJson: "Could not load JSON",
     loaded: "Loaded",
     turnsWord: "turns",
     sampleLoaded: "Sample conversation loaded",
     analyzed: "Analyzed",
     langLabel: "EN / עב",
+    speakerRoles: "Speaker roles",
+    speakerRolesHint:
+      "We detected these speakers. Map each one to a role — the analysis scores the coach's turns and looks for the client's owning moments.",
+    roleCoach: "Coach",
+    roleClient: "Client",
+    roleIgnore: "Ignore",
+    role: "Role",
+    speaker: "Speaker",
+    turnsCol: "Turns",
+    errNoCoach: "Map at least one speaker to Coach to run the analysis.",
   },
   he: {
     title: "ניתוח שליטה בשיחה",
@@ -512,14 +612,24 @@ export const UI_STRINGS = {
     start: "התחלה",
     end: "סוף",
     numTurns: "מס׳ תורות",
-    placeholder: "מאמן: מה הכי חשוב היום?\nלקוח: אני רוצה להבין מה הצעד הבא שלי.",
-    errNoTurns: "לא נמצאו תורות. השתמש בשורות כמו 'מאמן: ...' ו'לקוח: ...'",
+    placeholder:
+      "השתמש בכל שם דובר, תור אחד בכל שורה, למשל:\nשרה: מה הכי חשוב היום?\nדני: אני רוצה להבין מה הצעד הבא שלי.",
+    errNoTurns: "לא נמצאו תורות. השתמש בשורות כמו 'שם: ...' (כל שם דובר לפני הנקודתיים).",
     errBadJson: "לא ניתן לטעון את ה-JSON",
     loaded: "נטענו",
     turnsWord: "תורות",
     sampleLoaded: "שיחת דוגמה נטענה",
     analyzed: "נותחו",
     langLabel: "עב / EN",
+    speakerRoles: "תפקידי הדוברים",
+    speakerRolesHint:
+      "זיהינו את הדוברים הבאים. מפה כל אחד לתפקיד — הניתוח מדרג את תורות המאמן ומחפש רגעי בעלות של הלקוח.",
+    roleCoach: "מאמן",
+    roleClient: "לקוח",
+    roleIgnore: "התעלם",
+    role: "תפקיד",
+    speaker: "דובר",
+    turnsCol: "תורות",
+    errNoCoach: "מפה לפחות דובר אחד לתפקיד מאמן כדי להריץ את הניתוח.",
   },
 } as const;
-
